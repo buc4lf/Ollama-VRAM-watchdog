@@ -4,7 +4,7 @@ A lightweight bash script that monitors [Ollama](https://ollama.com/) for models
 
 ## The Problem
 
-When running Ollama in Docker alongside other GPU-intensive containers such as ComfyUI or Whisper, models may not fully load into VRAM. Instead, they split across GPU and CPU memory, resulting in noticeably degraded performance. Common causes include timing issues during Ollama's model switching and insufficient available VRAM due to competing workloads.
+Models may occasionally fail to load fully into VRAM, falling back partially or entirely to CPU and causing degraded performance. This can happen due to Ollama model-switching timing, insufficient available VRAM, or contention with other GPU-hungry containers (ComfyUI, Whisper, etc.) when running Ollama in Docker alongside them.
 
 ```
 $ ollama ps
