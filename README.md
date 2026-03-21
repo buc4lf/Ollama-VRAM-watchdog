@@ -18,6 +18,8 @@ The fix is simple — free the VRAM and reload — but doing it manually every t
 
 ## How It Works
 
+Note this script is written with a priority to Ollama VRAM utilization above any other running application that might be using VRAM.  Feel free to adjust according to your preferences. 
+
 1. Every 15 seconds, checks `ollama ps` for any model with a non-zero CPU percentage
 2. If found, stops other GPU containers (ComfyUI, Whisper, etc.) to free VRAM
 3. Restarts the Ollama Docker container
