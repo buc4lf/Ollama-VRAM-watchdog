@@ -4,7 +4,7 @@ A lightweight bash script that monitors [Ollama](https://ollama.com/) for models
 
 ## The Problem
 
-Models may occasionally fail to load fully into VRAM, falling back partially or entirely to CPU and causing degraded performance. This can happen due to Ollama model-switching timing, insufficient available VRAM, or contention with other GPU-hungry containers (ComfyUI, Whisper, etc.) when running Ollama in Docker alongside them.
+Models may occasionally fail to load fully into VRAM, falling back partially or entirely to CPU and causing degraded performance. This can happen due to LLM model-switching timing, insufficient available VRAM, or contention with other GPU-hungry containers (ComfyUI, Whisper, etc.) when running Ollama in Docker alongside them.
 
 ```
 $ ollama ps
