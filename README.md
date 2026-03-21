@@ -38,12 +38,8 @@ Note this script is written with a priority to Ollama VRAM utilization above any
 ## Quick Start
 
 ```bash
-# Clone the repo
-git clone https://github.com/YOUR_USERNAME/ollama-vram-watchdog.git
-cd ollama-vram-watchdog
-
-# Edit the configuration at the top of the script
-nano ollama-vram-watchdog.sh
+# Copy script, then Edit the configuration at the top of the script (See config options below)
+vi ollama-vram-watchdog.sh
 
 # Make it executable
 chmod +x ollama-vram-watchdog.sh
