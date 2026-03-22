@@ -33,7 +33,6 @@ Note this script is written with a priority to Ollama VRAM utilization above any
 - Ollama running as a Docker container
 - `ollama` CLI accessible from the host (via port mapping)
 - `docker` accessible without sudo (or run the script as root)
-- Bash 4+ (for associative arrays)
 
 ## Quick Start
 
