@@ -4,7 +4,7 @@ A lightweight bash script that monitors [Ollama](https://ollama.com/) for models
 
 ## The Problem
 
-Models may occasionally fail to load fully into VRAM, falling back partially or entirely to CPU and causing degraded performance. This can happen due to LLM model-switching timing, insufficient available VRAM, or contention with other GPU-hungry containers (ComfyUI, Whisper, etc.) when running Ollama in Docker alongside them.
+Models may occasionally fail to load fully into VRAM, falling back partially or entirely to the CPU and causing degraded performance. This can happen due to LLM model-switching timing, insufficient available VRAM, or contention with other GPU-hungry containers (ComfyUI, Whisper, etc.) when running Ollama in Docker alongside them.
 
 ```
 $ ollama ps
@@ -12,18 +12,18 @@ NAME          ID              SIZE     PROCESSOR          UNTIL
 gemma3:27b    a418f5838eaf    22 GB    23%/77% CPU/GPU    3 days from now
 ```
 
-This happens because other processes are occupying VRAM when the model loads. The result is significantly degraded inference performance since CPU memory is orders of magnitude slower than VRAM.
+This happens because other processes are occupying VRAM at the time the model loads. The result is significantly degraded inference performance since CPU memory is orders of magnitude slower than VRAM.
 
-The fix is simple — free the VRAM and reload — but doing it manually every time is tedious. This script automates the entire process.
+The fix is simple: free the VRAM and reload. But doing it manually every time is tedious. This script automates the entire process.
 
 ## How It Works
 
-Note this script is written with a priority to Ollama VRAM utilization above any other running application that might be using VRAM.  Feel free to adjust according to your preferences. 
+Note: This script prioritizes Ollama VRAM utilization over any other running application that may be using the GPU.  Feel free to adjust according to your preferences. 
 
 1. Every 15 seconds, checks `ollama ps` for any model with a non-zero CPU percentage
 2. If found, stops other GPU containers (ComfyUI, Whisper, etc.) to free VRAM
 3. Restarts the Ollama Docker container
-4. Reloads the same model
+4. Reloads the same model fully into GPU VRAM
 5. Verifies the model is now fully on GPU
 6. Restarts the other GPU containers
 7. Gives up after 3 failed attempts per model (to avoid infinite loops if the model genuinely doesn't fit)
@@ -83,8 +83,8 @@ Requires=docker.service
 
 [Service]
 Type=simple
-User=wesley
-ExecStart=/home/wesley/ollama-vram-watchdog.sh
+User=youruser
+ExecStart=/home/youruser/ollama-vram-watchdog.sh #Replace with the actual path to the script
 Restart=on-failure
 RestartSec=10
 
@@ -108,7 +108,7 @@ sudo systemctl stop ollama-vram-watchdog # stop
 ### Alternative: tmux
 
 ```bash
-tmux new -d -s watchdog '/home/wesley/ollama-vram-watchdog.sh'
+tmux new -d -s watchdog '/home/youruser/ollama-vram-watchdog.sh' #Replace with the actual path to the script
 ```
 
 > **Note:** Don't use cron for this. The script is a long-running loop, and cron would spawn overlapping instances that conflict with each other.
