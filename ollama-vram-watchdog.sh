@@ -1,11 +1,16 @@
 #!/bin/bash
 
 # ollama-vram-watchdog.sh
-# Monitors 'ollama ps' for models partially loaded on CPU and automatically
+# Monitors 'ollama ps' for models partially or fully loaded on CPU and automatically
 # restarts ollama (Docker) to force a clean GPU reload.
 #
 # Designed for systems where ollama runs in Docker alongside other GPU containers
 # (e.g., ComfyUI, Whisper) that may occupy VRAM and cause models to spill into CPU.
+#
+# Supported 'ollama ps' PROCESSOR column formats:
+#   "100% CPU"          → fully offloaded to CPU
+#   "48%/52% CPU/GPU"   → partially on CPU
+#   "100% GPU"          → fully on GPU (no action needed)
 #
 # Usage:
 #   chmod +x ollama-vram-watchdog.sh
@@ -20,7 +25,7 @@ GPU_CONTAINERS=("comfyui" "whisper" "whisper-libretranslate") # Containers that 
 CHECK_INTERVAL=15                                            # Seconds between checks
 MAX_RETRIES=3                                                # Max reload attempts per model before giving up
 KEEPALIVE="72h"                                              # How long ollama keeps the model loaded
-LOG_FILE="$HOME/ollama-vram-watchdog.log"                         # Log file location
+LOG_FILE="$HOME/ollama-vram-watchdog.log"                    # Log file location
 
 # ─── Functions ───────────────────────────────────────────────────────────────
 
@@ -28,6 +33,34 @@ declare -A retry_counts
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+# Extract CPU percentage from an 'ollama ps' line.
+# Returns the CPU percentage (0-100), or nothing if no CPU usage detected.
+# Handles:
+#   "100% CPU"         → 100
+#   "48%/52% CPU/GPU"  → 48
+#   "100% GPU"         → (nothing, fully on GPU)
+get_cpu_pct() {
+    local line="$1"
+
+    # Check for split format first: "X%/Y% CPU/GPU"
+    local split_match
+    split_match=$(echo "$line" | grep -oE '[0-9]+%/[0-9]+% CPU/GPU')
+    if [[ -n "$split_match" ]]; then
+        echo "$split_match" | grep -oE '^[0-9]+'
+        return
+    fi
+
+    # Check for full CPU offload: "100% CPU" or "N% CPU"
+    local cpu_match
+    cpu_match=$(echo "$line" | grep -oE '[0-9]+% CPU')
+    if [[ -n "$cpu_match" ]]; then
+        echo "$cpu_match" | grep -oE '^[0-9]+'
+        return
+    fi
+
+    # "100% GPU" or anything else → no CPU usage
 }
 
 stop_gpu_containers() {
@@ -85,8 +118,10 @@ reload_model() {
     sleep 15  # give it time to fully load into VRAM
 
     # Verify
+    local verify_line
+    verify_line=$(ollama ps 2>/dev/null | grep "^$model")
     local new_cpu
-    new_cpu=$(ollama ps 2>/dev/null | grep "^$model" | grep -oE '[0-9]+%/[0-9]+% CPU/GPU' | grep -oE '^[0-9]+')
+    new_cpu=$(get_cpu_pct "$verify_line")
 
     if [[ -z "$new_cpu" || "$new_cpu" -eq 0 ]]; then
         log "FIXED: $model is now fully on GPU"
@@ -116,10 +151,12 @@ while true; do
         [[ -z "$line" ]] && continue
 
         model=$(echo "$line" | awk '{print $1}')
-        cpu_pct=$(echo "$line" | grep -oE '[0-9]+%/[0-9]+% CPU/GPU' | grep -oE '^[0-9]+')
+        cpu_pct=$(get_cpu_pct "$line")
 
         # Skip if fully on GPU or no CPU percentage found
         [[ -z "$cpu_pct" || "$cpu_pct" -eq 0 ]] && continue
+
+        log "DETECTED: $model has ${cpu_pct}% CPU offload"
 
         retries=${retry_counts[$model]:-0}
 
