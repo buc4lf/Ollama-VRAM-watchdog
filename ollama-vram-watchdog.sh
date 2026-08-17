@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ollama-vram-watchdog.sh
-# Version: 1.1
+# Version: 1.2
 #
 # Monitors 'ollama ps' for models partially or fully loaded on CPU and automatically
 # restarts ollama (Docker) to force a clean GPU reload.
@@ -18,6 +18,15 @@
 #   chmod +x ollama-vram-watchdog.sh
 #   ./ollama-vram-watchdog.sh
 #
+# v1.2 changes:
+#   - Backs off entirely while jarvisprinting holds the GPU (lock file written by
+#     gpuswap.py). Without this, an ordinary voice command during a coloring-page
+#     render spills Gemma to CPU, the watchdog "frees VRAM" by running
+#     `docker stop comfyui`, and the render dies mid-sampling.
+#   - Give-up state now expires after GIVEUP_COOLDOWN instead of lasting until
+#     the watchdog is restarted by hand. Previously, three failed retries left a
+#     model stopped forever with no indication why voice had gone silent.
+#
 # See README.md for full setup instructions.
 
 # ─── Configuration ───────────────────────────────────────────────────────────
@@ -33,9 +42,15 @@ LOG_FILE="$HOME/ollama-vram-watchdog.log"                    # Log file location
 VERBOSE=1                                                    # 0=quiet, 1=normal, 2=debug (logs every check cycle)
 VRAM_SNAPSHOTS=1                                             # 1=capture nvidia-smi snapshots during incidents, 0=disable
 
+# Coordination with jarvisprinting (new in v1.2)
+LOCK_FILE="/tmp/jarvis_gpu.lock"                             # written by gpuswap.ensure_vram(), cleared by release_all()
+LOCK_STALE_SECS=300                                          # ignore a lock older than this (crashed generation)
+GIVEUP_COOLDOWN=3600                                         # seconds before a given-up model is retried again
+
 # ─── Functions ───────────────────────────────────────────────────────────────
 
 declare -A retry_counts
+declare -A giveup_time
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
@@ -43,6 +58,25 @@ log() {
 
 log_debug() {
     [[ "$VERBOSE" -ge 2 ]] && log "DEBUG: $*"
+}
+
+# True (0) while a coloring-page generation owns the GPU.
+# During that window Ollama models are SUPPOSED to be evicted or squeezed, so
+# any CPU spill we see is expected and transient -- remediating it would stop
+# the ComfyUI container out from under an in-flight render.
+gpu_locked() {
+    [[ -f "$LOCK_FILE" ]] || return 1
+
+    local mtime now age
+    mtime=$(stat -c %Y "$LOCK_FILE" 2>/dev/null) || return 1
+    now=$(date +%s)
+    age=$(( now - mtime ))
+
+    if (( age > LOCK_STALE_SECS )); then
+        log "Lock file is stale (${age}s old) -- ignoring and proceeding"
+        return 1
+    fi
+    return 0
 }
 
 # Map a PID to its Docker container name, if any.
@@ -226,7 +260,7 @@ reload_model() {
 # ─── Main Loop ───────────────────────────────────────────────────────────────
 
 log "=========================================="
-log "Watchdog started (v1.1)"
+log "Watchdog started (v1.2)"
 log "  Container:       $CONTAINER_NAME"
 log "  Check interval:  ${CHECK_INTERVAL}s"
 log "  Max retries:     $MAX_RETRIES per model"
@@ -234,6 +268,8 @@ log "  Keepalive:       $KEEPALIVE"
 log "  GPU containers:  ${GPU_CONTAINERS[*]}"
 log "  Verbose level:   $VERBOSE"
 log "  VRAM snapshots:  $VRAM_SNAPSHOTS"
+log "  Lock file:       $LOCK_FILE (stale after ${LOCK_STALE_SECS}s)"
+log "  Give-up cooldown: ${GIVEUP_COOLDOWN}s"
 log "=========================================="
 
 # One-time check: warn if nvidia-smi is unavailable but snapshots are enabled
@@ -242,6 +278,14 @@ if [[ "$VRAM_SNAPSHOTS" -eq 1 ]] && ! command -v nvidia-smi &>/dev/null; then
 fi
 
 while true; do
+    # Stand down while jarvisprinting owns the card. Skipping the whole cycle is
+    # correct: once the lock clears we resume and can still fix a genuine spill.
+    if gpu_locked; then
+        log_debug "jarvisprinting holds the GPU -- skipping this cycle"
+        sleep "$CHECK_INTERVAL"
+        continue
+    fi
+
     log_debug "Running ollama ps check"
 
     while IFS= read -r line; do
@@ -258,13 +302,26 @@ while true; do
 
         retries=${retry_counts[$model]:-0}
 
-        # Already gave up on this model
-        [[ "$retries" -eq -1 ]] && continue
+        # Previously gave up on this model -- retry once the cooldown expires,
+        # so a transient collision (e.g. a coloring-page render) can't leave the
+        # model stopped indefinitely with no voice assistant and no explanation.
+        if [[ "$retries" -eq -1 ]]; then
+            gave_up_at=${giveup_time[$model]:-0}
+            if (( $(date +%s) - gave_up_at >= GIVEUP_COOLDOWN )); then
+                log "COOLDOWN EXPIRED: retrying $model after ${GIVEUP_COOLDOWN}s"
+                retry_counts[$model]=0
+                retries=0
+            else
+                continue
+            fi
+        fi
 
         if [[ "$retries" -ge "$MAX_RETRIES" ]]; then
             log "GIVING UP: $model failed $MAX_RETRIES times — likely not enough VRAM. Stopping model."
+            log "  (will retry automatically in ${GIVEUP_COOLDOWN}s)"
             ollama stop "$model" 2>/dev/null
             retry_counts[$model]=-1
+            giveup_time[$model]=$(date +%s)
             continue
         fi
 
